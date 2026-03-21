@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database.connection import engine, Base
 
 # Import all routers
-from .routes import auth_routes, patrol_routes, incident_routes, user_routes, location_routes
+from .routes import auth_routes, patrol_routes, incident_routes, user_routes, location_routes, checklist_routes
 
 from .models import user, site, patrol, incident
 
@@ -32,7 +32,7 @@ app.include_router(patrol_routes.router)
 app.include_router(incident_routes.router)
 app.include_router(user_routes.router)       
 app.include_router(location_routes.router)
-
+app.include_router(checklist_routes.router)
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Patrol and Incident Reporting API"}

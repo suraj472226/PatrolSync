@@ -10,6 +10,10 @@ import LiveMap from "./pages/LiveMap";
 import MasterManagement from "./pages/MasterManagement";
 import Reports from "./pages/Reports";
 import NotFound from "./pages/NotFound";
+import QuestionBank from "./pages/QuestionBank";
+import ChecklistComposer from "./pages/ChecklistComposer";
+import ChecklistRepository from "./pages/ChecklistRepository";
+import ChecklistReports from "./pages/ChecklistReports";
 
 const queryClient = new QueryClient();
 
@@ -44,6 +48,10 @@ const App = () => (
                     <Route path="/live-map" element={<LiveMap />} />
                     <Route path="/master" element={<MasterManagement />} />
                     <Route path="/reports" element={<Reports />} />
+                    <Route path="/questions" element={<QuestionBank />} />
+                    <Route path="/composer" element={<ChecklistComposer />} />
+                    <Route path="/checklists" element={<ChecklistRepository />} />
+                    <Route path="/checklist-reports" element={<ChecklistReports />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </AppLayout>

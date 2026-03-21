@@ -3,7 +3,9 @@ from app.models.user import User, UserRole
 from app.models.site import Company, Site
 from app.models.patrol import Shift, PatrolLog, ScanType
 from app.models.incident import Incident
+from app.models.checklist import Checklist, Question, ChecklistQuestionLink
 from datetime import datetime, timedelta
+
 import random
 
 def seed_rich_data():
@@ -36,6 +38,7 @@ def seed_rich_data():
         # --- USERS ---
         users = [
             User(employee_id="ADM001", mobile_number="9999999999", hashed_password="hash", role=UserRole.ADMIN),
+            User(employee_id="ADM002", mobile_number="8888999999", hashed_password="hash", role=UserRole.ADMIN),
             User(employee_id="EMP101", mobile_number="8888888881", hashed_password="hash", role=UserRole.FIELD_OFFICER),
             User(employee_id="EMP102", mobile_number="8888888882", hashed_password="hash", role=UserRole.FIELD_OFFICER),
             User(employee_id="EMP103", mobile_number="8888888883", hashed_password="hash", role=UserRole.FIELD_OFFICER)
@@ -47,8 +50,8 @@ def seed_rich_data():
         # --- ACTIVE SHIFTS (For the Live Map) ---
         # We will make EMP101 and EMP102 currently on duty
         shifts = [
-            Shift(user_id=users[1].id, start_time=now - timedelta(hours=2), start_latitude=18.5204, start_longitude=73.8567),
-            Shift(user_id=users[2].id, start_time=now - timedelta(hours=1), start_latitude=18.5247, start_longitude=73.8629)
+            Shift(user_id=users[2].id, start_time=now - timedelta(hours=2), start_latitude=18.5204, start_longitude=73.8567),
+            Shift(user_id=users[3].id, start_time=now - timedelta(hours=1), start_latitude=18.5247, start_longitude=73.8629)
         ]
         db.add_all(shifts)
         db.commit()
@@ -65,17 +68,17 @@ def seed_rich_data():
         # --- INCIDENTS (For "Critical Incidents" and Reports Table) ---
         incidents = [
             Incident(
-                user_id=users[1].id, site_id=sites[0].id, category="Maintenance", 
+                user_id=users[2].id, site_id=sites[0].id, category="Maintenance",
                 remarks="Broken window near the south gate.", reported_at=now - timedelta(hours=1),
                 latitude=18.5205, longitude=73.8568
             ),
             Incident(
-                user_id=users[2].id, site_id=sites[1].id, category="EMERGENCY_SOS", 
+                user_id=users[3].id, site_id=sites[1].id, category="EMERGENCY_SOS",
                 remarks="Suspicious activity in the parking lot! Requesting backup.", reported_at=now - timedelta(minutes=15),
                 latitude=18.5248, longitude=73.8630
             ),
             Incident(
-                user_id=users[1].id, site_id=sites[0].id, category="Security", 
+                user_id=users[2].id, site_id=sites[0].id, category="Security",
                 remarks="Unauthorized vehicle parked in reserved spot.", reported_at=now - timedelta(minutes=5),
                 latitude=18.5202, longitude=73.8565
             )
@@ -83,11 +86,11 @@ def seed_rich_data():
         db.add_all(incidents)
         db.commit()
 
-        print("✅ Success! Database populated with rich test data.")
-        print("Login with Employee ID: ADM001 | OTP: 123456")
+        print("Success! Database populated with rich test data.")
+        print("Login with Employee ID: ADM001 or ADM002 | OTP: 123456")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         db.rollback()
     finally:
         db.close()
