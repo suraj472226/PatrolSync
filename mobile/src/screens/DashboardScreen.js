@@ -1,143 +1,434 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, RefreshControl } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Location from 'expo-location';
+import * as Battery from 'expo-battery';
+import { Ionicons } from '@expo/vector-icons';
 import api from '../services/api';
 
-export default function DashboardScreen({ navigation }) {
-  const [isShiftActive, setIsShiftActive] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [locationStr, setLocationStr] = useState('Location not captured yet');
+// Import dashboard components
+import OfficerInfoCard from '../components/dashboard/OfficerInfoCard';
+import ShiftTimer from '../components/dashboard/ShiftTimer';
+import StatusBar from '../components/dashboard/StatusBar';
+import PatrolActions from '../components/dashboard/PatrolActions';
+import RecentPatrolLogs from '../components/dashboard/RecentPatrolLogs';
+import SOSButton from '../components/dashboard/SOSButton';
 
-  // Verify permissions when the dashboard loads
+export default function DashboardScreen({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // Dashboard data
+  const [dashboardData, setDashboardData] = useState(null);
+  const [isShiftActive, setIsShiftActive] = useState(false);
+  const [shiftElapsedSeconds, setShiftElapsedSeconds] = useState(0);
+  const [locationStr, setLocationStr] = useState('');
+  const [batteryLevel, setBatteryLevel] = useState(100);
+
+  // Fetch dashboard data
+  const fetchDashboard = async () => {
+    try {
+      const response = await api.get('/mobile/dashboard');
+      const data = response.data;
+
+      setDashboardData(data);
+      setIsShiftActive(data.active_shift !== null);
+      if (data.active_shift) {
+        setShiftElapsedSeconds(data.active_shift.elapsed_seconds || 0);
+      } else {
+        setShiftElapsedSeconds(0);
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard:', error);
+      // Fallback to basic info
+      setDashboardData({
+        officer: {
+          id: 0,
+          employee_id: 'Unknown',
+          name: 'Officer',
+          role: 'Field Officer',
+          status: 'off_duty'
+        },
+        active_shift: null,
+        status_indicators: {
+          gps_status: 'inactive',
+          sync_status: 'synced',
+          battery_level: 100,
+          pending_sync_count: 0
+        },
+        patrol_actions: [],
+        recent_logs: []
+      });
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Request permissions
   useEffect(() => {
     (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
+      const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Denied', 'GPS tracking is mandatory for shifts. Please enable it in settings.');
       }
     })();
   }, []);
 
+  // Load dashboard on mount
+  useEffect(() => {
+    fetchDashboard();
+  }, []);
+
+  // Get battery level
+  useEffect(() => {
+    const getBatteryLevel = async () => {
+      try {
+        const level = await Battery.getBatteryLevelAsync();
+        setBatteryLevel(Math.round(level * 100));
+      } catch (error) {
+        console.log('Battery level unavailable:', error);
+        setBatteryLevel(100);
+      }
+    };
+
+    getBatteryLevel();
+
+    // Update battery level every 30 seconds
+    const interval = setInterval(getBatteryLevel, 30000);
+
+    // Listen for battery level changes
+    const subscription = Battery.addBatteryLevelListener(({ batteryLevel: level }) => {
+      setBatteryLevel(Math.round(level * 100));
+    });
+
+    return () => {
+      clearInterval(interval);
+      subscription?.remove();
+    };
+  }, []);
+
+  // Refresh handler
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    fetchDashboard();
+  }, []);
+
+  // Start shift handler
   const handleStartShift = async () => {
-    setIsLoading(true);
+    setActionLoading(true);
     try {
-      // 1. Grab the exact GPS coordinates
-      let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const lat = location.coords.latitude;
       const lon = location.coords.longitude;
-      
+
       setLocationStr(`Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}`);
 
-      // 2. Send the shift start punch to FastAPI
       await api.post('/patrol/shift/start', {
         start_latitude: lat,
         start_longitude: lon
       });
 
       setIsShiftActive(true);
+      setShiftElapsedSeconds(0);  // Start from 0 when shift begins
       Alert.alert('Shift Started', 'Your GPS location has been recorded. Stay safe!');
+      fetchDashboard();
 
     } catch (error) {
-      // --- THE SELF-HEALING FIX ---
       if (error.response?.status === 400) {
-        console.log("Backend says shift is already active! Syncing UI...");
-        setIsShiftActive(true); // Force the UI to show ON DUTY
+        // Shift already active
+        setIsShiftActive(true);
         Alert.alert('Session Restored', 'You are already on duty! UI synced with the server.');
+        fetchDashboard();
       } else {
         Alert.alert('Error', error.response?.data?.detail || 'Could not start shift. Ensure GPS is on.');
       }
     } finally {
-      setIsLoading(false);
+      setActionLoading(false);
     }
   };
 
+  // End shift handler
   const handleEndShift = async () => {
-    setIsLoading(true);
-    try {
-      // 1. Grab final GPS coordinates
-      let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      
-      // 2. Send the shift end punch to FastAPI
-      await api.post('/patrol/shift/end', {
-        end_latitude: location.coords.latitude,
-        end_longitude: location.coords.longitude
-      });
+    Alert.alert(
+      'End Shift',
+      'Are you sure you want to end your shift?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'End Shift',
+          style: 'destructive',
+          onPress: async () => {
+            setActionLoading(true);
+            try {
+              const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
 
-      setIsShiftActive(false);
-      Alert.alert('Shift Ended', 'Shift completed successfully. Great job.');
+              await api.post('/patrol/shift/end', {
+                end_latitude: location.coords.latitude,
+                end_longitude: location.coords.longitude
+              });
 
-    } catch (error) {
-      console.error(error);
-      Alert.alert('Error', 'Could not end shift. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+              setIsShiftActive(false);
+              setShiftStartTime(null);
+              Alert.alert('Shift Ended', 'Shift completed successfully. Great job.');
+              fetchDashboard();
+
+            } catch (error) {
+              Alert.alert('Error', 'Could not end shift. Please try again.');
+            } finally {
+              setActionLoading(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
+  // Logout handler
   const handleLogout = async () => {
     if (isShiftActive) {
       Alert.alert('Action Required', 'Please end your shift before logging out.');
       return;
     }
-    await SecureStore.deleteItemAsync('access_token');
-    navigation.replace('Login');
+
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            await SecureStore.deleteItemAsync('access_token');
+            navigation.replace('Login');
+          }
+        }
+      ]
+    );
   };
+
+  // Navigate to SOS
+  const handleSOS = () => {
+    navigation.navigate('SOS');
+  };
+
+  // Navigate to scan
+  const handleScan = () => {
+    navigation.navigate('QRScanner');
+  };
+
+  // Navigate to checklist
+  const handleChecklist = () => {
+    navigation.navigate('ChecklistList');
+  };
+
+  // Navigate to incident
+  const handleIncident = () => {
+    navigation.navigate('Incident');
+  };
+
+  // Navigate to activity
+  const handleViewActivity = () => {
+    navigation.navigate('Activity');
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={styles.loadingText}>Loading dashboard...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <View style={styles.headerCard}>
-        <Text style={styles.title}>Command Center</Text>
-        <Text style={styles.statusText}>
-          Status: {isShiftActive ? <Text style={styles.active}>🟢 ON DUTY</Text> : <Text style={styles.inactive}>🔴 OFF DUTY</Text>}
-        </Text>
-        <Text style={styles.locationText}>Last GPS: {locationStr}</Text>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Command Center</Text>
+        <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
+          <Ionicons name="log-out-outline" size={24} color="#71717a" />
+        </TouchableOpacity>
       </View>
 
-      <View style={styles.actionContainer}>
-        {!isShiftActive ? (
-          <TouchableOpacity style={[styles.mainButton, styles.startButton]} onPress={handleStartShift} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.mainButtonText}>Start Shift</Text>}
-          </TouchableOpacity>
-        ) : (
-          <>
-            <TouchableOpacity style={[styles.mainButton, styles.scanButton]} onPress={() => navigation.navigate('QRScanner')}>
-              <Text style={styles.mainButtonText}>📷 Scan Checkpoint</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={[styles.mainButton, styles.incidentButton]} onPress={() => navigation.navigate('Incident')}>
-              <Text style={styles.mainButtonText}>⚠️ Report Incident</Text>
-            </TouchableOpacity>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3b82f6']} />
+        }
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Officer Info Card */}
+        <OfficerInfoCard
+          officer={{
+            ...dashboardData?.officer,
+            status: isShiftActive ? 'on_duty' : 'off_duty'
+          }}
+        />
 
-            <TouchableOpacity style={[styles.mainButton, styles.endButton]} onPress={handleEndShift} disabled={isLoading}>
-              {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.mainButtonText}>End Shift</Text>}
+        {/* Shift Timer */}
+        <View style={styles.section}>
+          <ShiftTimer
+            elapsedSeconds={shiftElapsedSeconds}
+            isActive={isShiftActive}
+          />
+        </View>
+
+        {/* Status Bar */}
+        <View style={styles.section}>
+          <StatusBar
+            gpsStatus={dashboardData?.status_indicators?.gps_status || 'active'}
+            syncStatus={dashboardData?.status_indicators?.sync_status || 'synced'}
+            batteryLevel={batteryLevel}
+            pendingCount={dashboardData?.status_indicators?.pending_sync_count || 0}
+          />
+        </View>
+
+        {/* Shift Start/End Button */}
+        <View style={styles.section}>
+          {!isShiftActive ? (
+            <TouchableOpacity
+              style={styles.startButton}
+              onPress={handleStartShift}
+              disabled={actionLoading}
+            >
+              {actionLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="play-circle" size={24} color="#fff" />
+                  <Text style={styles.startButtonText}>Start Shift</Text>
+                </>
+              )}
             </TouchableOpacity>
-          </>
-        )}
-      </View>
-      
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Log Out</Text>
-      </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.endButton}
+              onPress={handleEndShift}
+              disabled={actionLoading}
+            >
+              {actionLoading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="stop-circle" size={24} color="#fff" />
+                  <Text style={styles.endButtonText}>End Shift</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Patrol Actions */}
+        <View style={styles.section}>
+          <PatrolActions
+            onScan={handleScan}
+            onChecklist={handleChecklist}
+            onIncident={handleIncident}
+            checklistCount={dashboardData?.patrol_actions?.find(a => a.type === 'checklist')?.count || 0}
+            isShiftActive={isShiftActive}
+          />
+        </View>
+
+        {/* SOS Button */}
+        <SOSButton onPress={handleSOS} isActive={isShiftActive} />
+
+        {/* Recent Activity */}
+        <View style={styles.section}>
+          <RecentPatrolLogs
+            logs={dashboardData?.recent_logs || []}
+            onViewAll={handleViewActivity}
+          />
+        </View>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f4f4f5', padding: 20 },
-  headerCard: { backgroundColor: '#fff', padding: 20, borderRadius: 12, elevation: 3, marginTop: 40, marginBottom: 30, alignItems: 'center' },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#18181b', marginBottom: 10 },
-  statusText: { fontSize: 18, fontWeight: '600' },
-  active: { color: '#16a34a' },
-  inactive: { color: '#dc2626' },
-  locationText: { fontSize: 12, color: '#71717a', marginTop: 10 },
-  actionContainer: { flex: 1, justifyContent: 'center', gap: 15 },
-  mainButton: { padding: 18, borderRadius: 12, alignItems: 'center', elevation: 2 },
-  startButton: { backgroundColor: '#16a34a' },
-  endButton: { backgroundColor: '#dc2626', marginTop: 20 },
-  scanButton: { backgroundColor: '#2563eb' },
-  incidentButton: { backgroundColor: '#ea580c' },
-  mainButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  logoutButton: { padding: 15, alignItems: 'center', marginBottom: 20 },
-  logoutText: { color: '#71717a', fontSize: 16, fontWeight: '600' }
+  container: {
+    flex: 1,
+    backgroundColor: '#f4f4f5',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f4f4f5',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#71717a',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 50,
+    paddingBottom: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e4e4e7',
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#18181b',
+  },
+  logoutButton: {
+    padding: 8,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 32,
+  },
+  section: {
+    marginTop: 16,
+  },
+  startButton: {
+    backgroundColor: '#22c55e',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8,
+    elevation: 3,
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  startButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  endButton: {
+    backgroundColor: '#ef4444',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8,
+    elevation: 3,
+    shadowColor: '#ef4444',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  endButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
 });
