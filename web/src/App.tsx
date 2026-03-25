@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -14,16 +15,99 @@ import QuestionBank from "./pages/QuestionBank";
 import ChecklistComposer from "./pages/ChecklistComposer";
 import ChecklistRepository from "./pages/ChecklistRepository";
 import ChecklistReports from "./pages/ChecklistReports";
+import api from "./services/api";
 
 const queryClient = new QueryClient();
 
-// --- THE BOUNCER ---
-// This component wraps our secure routes. If there's no token, it redirects to /login.
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+const clearStoredAuth = () => {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("user");
+};
+
+const validateSession = async (): Promise<boolean> => {
   const token = localStorage.getItem("access_token");
   if (!token) {
+    return false;
+  }
+
+  try {
+    await api.get("/auth/me");
+    return true;
+  } catch {
+    clearStoredAuth();
+    return false;
+  }
+};
+
+const AuthCheckLoader = () => (
+  <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+    Checking session...
+  </div>
+);
+
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const [isChecking, setIsChecking] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const runCheck = async () => {
+      const valid = await validateSession();
+      if (isMounted) {
+        setIsAuthenticated(valid);
+        setIsChecking(false);
+      }
+    };
+
+    runCheck();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  if (isChecking) {
+    return <AuthCheckLoader />;
+  }
+
+  if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
+
+  return <>{children}</>;
+};
+
+const LoginRoute = ({ children }: { children: React.ReactNode }) => {
+  const [isChecking, setIsChecking] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const runCheck = async () => {
+      const valid = await validateSession();
+      if (isMounted) {
+        setIsAuthenticated(valid);
+        setIsChecking(false);
+      }
+    };
+
+    runCheck();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  if (isChecking) {
+    return <AuthCheckLoader />;
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
+
   return <>{children}</>;
 };
 
@@ -34,10 +118,15 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          {/* Public Route */}
-          <Route path="/login" element={<Login />} />
+          <Route
+            path="/login"
+            element={
+              <LoginRoute>
+                <Login />
+              </LoginRoute>
+            }
+          />
           
-          {/* Protected Routes */}
           <Route
             path="/*"
             element={
