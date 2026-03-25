@@ -1,8 +1,8 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { API_BASE_URL } from '@env';
 
-// 🛑 REPLACE THIS WITH YOUR COMPUTER'S ACTUAL WI-FI IPv4 ADDRESS
-const BASE_URL = 'http://10.112.194.132:8000'; 
+const BASE_URL = API_BASE_URL; 
 
 const api = axios.create({
   baseURL: BASE_URL,
